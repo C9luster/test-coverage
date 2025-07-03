@@ -211,7 +211,10 @@ def generate_coverage_report(include_dirs, html_output_dir=None, xml_output_file
     if coverage_data_file:
         env['COVERAGE_FILE'] = coverage_data_file
     try:
-        include_pattern = "*/test_coverage/agents/*,*/test_coverage/utils/*"
+        # 使用绝对路径，防止路径BUG
+        agents_dir_abs = os.path.abspath(include_dirs[0])
+        utils_dir_abs = os.path.abspath(include_dirs[1])
+        include_pattern = f"{agents_dir_abs}/*,{utils_dir_abs}/*"
         # 1. 只统计被测代码
         subprocess.run(["coverage", "report", f"--include={include_pattern}"], check=True, env=env)
         # 2. 生成 html 报告
