@@ -1,0 +1,8 @@
+# 现有忽略规则
+# ... existing code ...
+
+# 覆盖率报告目录
+coverage_result/
+htmlcov/ 
+test_coverage.egg-info/
+__pycache__/
