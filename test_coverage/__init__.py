@@ -1,3 +1,3 @@
-from .tests.serial_test import SerialTest
+from .tests.unittest_tag import SerialUnitTest, SkipUnitTest
 
-__all__ = ['SerialTest']
+__all__ = ['SerialUnitTest', 'SkipUnitTest']

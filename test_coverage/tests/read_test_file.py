@@ -143,79 +143,21 @@ def run_with_retries(test_files, coverage_data_file, tests_dir, section_name):
     total_time = time.time() - t0
     return all_results, total_time, retry_time
 
-def run_parallel_tests(test_files, coverage_dir, tests_dir, coverage_data_file):
-    print("\n================ 并行测试 ================")
-    t0 = time.time()
-    retry_time = 0.0
-    results = []
-    labels = []
-    args_list = [(test_file, coverage_dir, tests_dir) for test_file in test_files]
-    worker_cov_files = []
-    with concurrent.futures.ProcessPoolExecutor() as executor:
-        future_to_file = {executor.submit(parallel_worker, args): args[0] for args in args_list}
-        for future in concurrent.futures.as_completed(future_to_file):
-            res, cov_file = future.result()
-            worker_cov_files.append(cov_file)
-            label = f"❌ [FAIL] {res['rel_path']}" if res["is_fail"] else f"✅ [OK]   {res['rel_path']}"
-            res["label"] = label
-            res["attempt"] = 1
-            results.append(res)
-            labels.append(label)
-    results.sort(key=lambda x: x['rel_path'])
-    max_label_len = max(len(l) for l in labels) if labels else 0
-    print_test_results(results, max_label_len)
-    failed = [r for r in results if r["is_fail"]]
-    print_failed_details(failed)
-    # 并行失败重试
-    for round_num in [2, 3]:
-        if not failed:
-            break
-        retry_results = []
-        retry_labels = []
-        retry_args_list = [(res["file"], coverage_dir, tests_dir) for res in failed]
-        t_retry = time.time()
-        with concurrent.futures.ProcessPoolExecutor() as executor:
-            future_to_file = {executor.submit(parallel_worker, args): args[0] for args in retry_args_list}
-            for future in concurrent.futures.as_completed(future_to_file):
-                retry_res, cov_file = future.result()
-                worker_cov_files.append(cov_file)
-                retry_res["label"] = f"❌ [FAIL] {retry_res['rel_path']} (重试{round_num})" if retry_res["is_fail"] else f"✅ [OK]   {retry_res['rel_path']} (重试{round_num})"
-                retry_res["attempt"] = round_num
-                retry_results.append(retry_res)
-                retry_labels.append(retry_res["label"])
-        retry_time += time.time() - t_retry
-        retry_results.sort(key=lambda x: x['rel_path'])
-        retry_max_label_len = max(len(l) for l in retry_labels) if retry_labels else 0
-        print(f"\n----------------  第{round_num}轮重新测试  ----------------")
-        print_test_results(retry_results, retry_max_label_len)
-        failed = [r for r in retry_results if r["is_fail"]]
-        print_failed_details(failed)
-        results.extend(retry_results)
-    # 合并所有worker_cov_files
-    if worker_cov_files:
-        combine_cmd = f"coverage combine {' '.join(worker_cov_files)} -o {coverage_data_file} > {os.devnull} 2>&1"
-        os.system(combine_cmd)
-        for f in worker_cov_files:
-            try:
-                os.remove(f)
-            except Exception:
-                pass
-    total_time = time.time() - t0
-    return results, total_time, retry_time
-
 def generate_coverage_report(include_dirs, html_output_dir=None, xml_output_file=None, coverage_data_file=None):
-    # 强制使用 test_coverage/agents/*,test_coverage/utils/*
-    include_pattern = "test_coverage/agents/*,test_coverage/utils/*"
     env = os.environ.copy()
     if coverage_data_file:
         env['COVERAGE_FILE'] = coverage_data_file
     try:
+        include_pattern = "*/test_coverage/agents/*,*/test_coverage/utils/*"
+        # 1. 只统计被测代码
         subprocess.run(["coverage", "report", f"--include={include_pattern}"], check=True, env=env)
+        # 2. 生成 html 报告
         if html_output_dir:
             subprocess.run([
                 "coverage", "html", f"--include={include_pattern}", "-d", html_output_dir
             ], check=True, env=env)
             print(f"\033[92m✅ 覆盖率报告已生成，HTML报告在{html_output_dir}目录下。\033[0m")
+        # 3. 只针对 agents 和 utils 生成 xml
         if xml_output_file:
             subprocess.run([
                 "coverage", "xml", f"--include={include_pattern}", "-o", xml_output_file
@@ -233,8 +175,8 @@ def main():
     utils_dir = os.path.join(project_root, "utils")
     htmlcov_dir = os.path.join(test_dir, "htmlcov")
     coverage_result_dir = os.path.join(test_dir, "coverage_result")
-    coverage_data_file = os.path.join(coverage_result_dir, ".coverage")
-    coverage_xml_file = os.path.join(coverage_result_dir, "coverage.xml")
+    coverage_data_file = os.path.join(test_dir, ".coverage")
+    coverage_xml_file = os.path.join(test_dir, "coverage.xml")
 
     # 检查目录是否存在
     for d in [test_dir, agents_dir, utils_dir]:
@@ -247,10 +189,10 @@ def main():
     os.makedirs(coverage_result_dir, exist_ok=True)
 
     # 清理 coverage_result_dir 下所有 .coverage* 文件
-    for f in os.listdir(coverage_result_dir):
+    for f in os.listdir(test_dir):
         if f.startswith('.coverage'):
             try:
-                os.remove(os.path.join(coverage_result_dir, f))
+                os.remove(os.path.join(test_dir, f))
             except Exception:
                 pass
 
@@ -265,34 +207,16 @@ def main():
     env['COVERAGE_FILE'] = coverage_data_file
     subprocess.run(["coverage", "erase"], env=env)
 
-    # 分类串行和并行
-    serial_files = []
-    parallel_files = []
-    for f in test_files:
-        if is_serial_test(f):
-            serial_files.append(f)
-        else:
-            parallel_files.append(f)
-
-    total_parallel_time = 0.0
-    total_serial_time = 0.0
+    total_time = 0.0
     total_retry_time = 0.0
 
-    # 并行测试
-    if parallel_files:
-        _, parallel_time, parallel_retry_time = run_parallel_tests(parallel_files, coverage_result_dir, test_dir, coverage_data_file)
-        total_parallel_time += parallel_time
-        total_retry_time += parallel_retry_time
-    # 串行测试
-    if serial_files:
-        _, serial_time, serial_retry_time = run_with_retries(serial_files, coverage_data_file, test_dir, section_name="串行测试")
-        total_serial_time += serial_time
+    # 全部串行测试
+    if test_files:
+        _, serial_time, serial_retry_time = run_with_retries(test_files, coverage_data_file, test_dir, section_name="全部测试")
+        total_time += serial_time
         total_retry_time += serial_retry_time
 
-    total_time = total_parallel_time + total_serial_time
     print("\n================ 测试时间统计 ================")
-    print(f"并行测试耗时: {total_parallel_time:.3f}s")
-    print(f"串行测试耗时: {total_serial_time:.3f}s")
     print(f"总耗时:       {total_time:.3f}s")
 
     # 生成html报告和xml报告，全部放在tests/coverage_result和tests/htmlcov下
