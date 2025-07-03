@@ -6,3 +6,5 @@ coverage_result/
 htmlcov/ 
 test_coverage.egg-info/
 __pycache__/
+coverage.xml
+.coverage
