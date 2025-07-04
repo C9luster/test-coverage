@@ -2,8 +2,8 @@
 # ... existing code ...
 
 # 覆盖率报告目录
-coverage_result/
-htmlcov/ 
+tests/coverage_result/
+tests/htmlcov/ 
 test_coverage.egg-info/
 __pycache__/
 coverage.xml

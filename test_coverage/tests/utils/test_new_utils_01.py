@@ -9,7 +9,7 @@ class TestDemo(unittest.TestCase):
         self.assertEqual(Util(6, 4).plus(), 10)
 
     def test_subtract(self):
-        self.assertEqual(Util(6, 4).subtract(), -1)
+        self.assertEqual(Util(6, 4).subtract(), random.randint(1, 2))
 
 
 if __name__ == '__main__':

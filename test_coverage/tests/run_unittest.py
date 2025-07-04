@@ -81,7 +81,7 @@ def print_failed_details(failed_results):
     if failed_results:
         print("\n========== 失败测试详细信息 ==========")
         for res in failed_results:
-            attempt_str = f" (第{res['attempt']}次)" if res['attempt'] > 1 else ""
+            attempt_str = f" (第{res['attempt'] - 1}次)" if res['attempt'] > 1 else ""
             print(f"\n---------------- \033[91m⚠️ {res['rel_path']}⚠️{attempt_str}\033[0m ----------------")
             if res["stdout"]:
                 print(res["stdout"])
@@ -114,7 +114,7 @@ def run_parallel_tests(test_files, coverage_dir, tests_dir, coverage_data_file):
     print_test_results(results, max_label_len)
     failed = [r for r in results if r["is_fail"]]
     print_failed_details(failed)
-    # 第2、3轮重试
+    # 第1、2轮重试
     for round_num in [2, 3]:
         if not failed:
             break
@@ -127,14 +127,14 @@ def run_parallel_tests(test_files, coverage_dir, tests_dir, coverage_data_file):
             for future in concurrent.futures.as_completed(future_to_file):
                 retry_res, cov_file = future.result()
                 worker_cov_files.append(cov_file)
-                retry_res["label"] = f"❌ [FAIL] {retry_res['rel_path']} (重试{round_num})" if retry_res["is_fail"] else f"✅ [OK]   {retry_res['rel_path']} (重试{round_num})"
+                retry_res["label"] = f"❌ [FAIL] {retry_res['rel_path']} (重试{round_num - 1})" if retry_res["is_fail"] else f"✅ [OK]   {retry_res['rel_path']} (重试{round_num - 1})"
                 retry_res["attempt"] = round_num
                 retry_results.append(retry_res)
                 retry_labels.append(retry_res["label"])
         retry_time += time.time() - t_retry
         retry_results.sort(key=lambda x: x['rel_path'])
         retry_max_label_len = max(len(l) for l in retry_labels) if retry_labels else 0
-        print(f"\n----------------  第{round_num}轮重新测试  ----------------")
+        print(f"\n----------------  第{round_num - 1}轮重新测试  ----------------")
         print_test_results(retry_results, retry_max_label_len)
         failed = [r for r in retry_results if r["is_fail"]]
         print_failed_details(failed)
@@ -175,7 +175,7 @@ def run_with_retries(test_files, coverage_data_file, tests_dir, section_name):
             retry_results_2.append(retry_res)
         retry_time += time.time() - t_retry2
         retry_max_label_len_2 = max(len(l) for l in retry_labels_2) if retry_labels_2 else 0
-        print("\n----------------  第2轮重新测试  ----------------")
+        print("\n----------------  第1轮重新测试  ----------------")
         print_test_results(retry_results_2, retry_max_label_len_2)
         failed_2 = [r for r in retry_results_2 if r["is_fail"]]
         print_failed_details(failed_2)
@@ -196,7 +196,7 @@ def run_with_retries(test_files, coverage_data_file, tests_dir, section_name):
             retry_results_3.append(retry_res)
         retry_time += time.time() - t_retry3
         retry_max_label_len_3 = max(len(l) for l in retry_labels_3) if retry_labels_3 else 0
-        print("\n----------------  第3轮重新测试  ----------------")
+        print("\n----------------  第2轮重新测试  ----------------")
         print_test_results(retry_results_3, retry_max_label_len_3)
         failed_3 = [r for r in retry_results_3 if r["is_fail"]]
         print_failed_details(failed_3)
@@ -244,8 +244,8 @@ def import_all_modules_from_dir(module_dir, module_prefix):
                 except Exception as e:
                     print(f"导入模块 {full_mod_name} 失败: {e}")
 
-def main():
-    # 获取项目根目录（假设本脚本在tests目录下）
+def initialize_directories():
+    """初始化目录和路径"""
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(current_dir)
     test_dir = os.path.join(project_root, "tests")
@@ -255,44 +255,50 @@ def main():
     coverage_result_dir = os.path.join(test_dir, "coverage_result")
     coverage_data_file = os.path.join(test_dir, ".coverage")
     coverage_xml_file = os.path.join(test_dir, "coverage.xml")
+    
+    return {
+        'test_dir': test_dir,
+        'agents_dir': agents_dir,
+        'utils_dir': utils_dir,
+        'htmlcov_dir': htmlcov_dir,
+        'coverage_result_dir': coverage_result_dir,
+        'coverage_data_file': coverage_data_file,
+        'coverage_xml_file': coverage_xml_file
+    }
 
-    # 在测试前 import 所有被测模块，确保 coverage 能检测到
-    import_all_modules_from_dir(agents_dir, 'test_coverage.agents')
-    import_all_modules_from_dir(utils_dir, 'test_coverage.utils')
+def validate_directories(dirs):
+    """验证必要的目录是否存在"""
+    for dir_name, dir_path in dirs.items():
+        if dir_name in ['test_dir', 'agents_dir', 'utils_dir'] and not os.path.isdir(dir_path):
+            print(f"目录不存在: {dir_path}", file=sys.stderr)
+            return False
+    return True
 
-    # 检查目录是否存在
-    for d in [test_dir, agents_dir, utils_dir]:
-        if not os.path.isdir(d):
-            print(f"目录不存在: {d}", file=sys.stderr)
-            return
-
+def setup_coverage_environment(dirs):
+    """设置覆盖率环境"""
     # 创建结果目录
-    os.makedirs(htmlcov_dir, exist_ok=True)
-    os.makedirs(coverage_result_dir, exist_ok=True)
+    os.makedirs(dirs['htmlcov_dir'], exist_ok=True)
+    os.makedirs(dirs['coverage_result_dir'], exist_ok=True)
 
     # 清理 coverage_result_dir 下所有 .coverage* 文件
-    for f in os.listdir(test_dir):
+    for f in os.listdir(dirs['test_dir']):
         if f.startswith('.coverage'):
             try:
-                os.remove(os.path.join(test_dir, f))
+                os.remove(os.path.join(dirs['test_dir'], f))
             except Exception:
                 pass
 
-    # 查找测试文件
-    test_files = find_test_files(test_dir)
-    if not test_files:
-        print("未找到任何测试文件。", file=sys.stderr)
-        return
-
     # 清理旧的coverage数据
     env = os.environ.copy()
-    env['COVERAGE_FILE'] = coverage_data_file
+    env['COVERAGE_FILE'] = dirs['coverage_data_file']
     subprocess.run(["coverage", "erase"], env=env)
 
-    # 分类：skip/serial/parallel
+def classify_test_files(test_files, test_dir):
+    """将测试文件分类为skip/serial/parallel"""
     skip_files = []
     serial_files = []
     parallel_files = []
+    
     for f in test_files:
         if is_skip_test(f):
             skip_files.append(f)
@@ -300,59 +306,115 @@ def main():
             serial_files.append(f)
         else:
             parallel_files.append(f)
+    
+    return skip_files, serial_files, parallel_files
 
-    # 跳过的测试文件
+def print_skipped_tests(skip_files, test_dir):
+    """打印跳过的测试文件"""
     if skip_files:
         print("\n================ 跳过的测试 ================")
         for f in skip_files:
             rel_path = relpath_from_tests(f, test_dir)
             print(f"⏭️  跳过: {rel_path}")
 
+def run_all_tests(parallel_files, serial_files, dirs):
+    """执行所有测试并返回时间统计"""
     total_parallel_time = 0.0
     total_serial_time = 0.0
     total_retry_time = 0.0
-
-    # 并行和串行分别用不同的 coverage 文件
-    # 并行测试不传 coverage_data_file，让 worker 只生成 .coverage.worker-xxxx
-    coverage_data_file_serial = os.path.join(test_dir, ".coverage.serial")
-
     all_worker_cov_files = []
+    
     # 并行测试
     if parallel_files:
         print("\n================ 并行测试 ================")
-        _, parallel_time, parallel_retry_time, worker_cov_files = run_parallel_tests(parallel_files, test_dir, test_dir, None)
+        _, parallel_time, parallel_retry_time, worker_cov_files = run_parallel_tests(
+            parallel_files, dirs['test_dir'], dirs['test_dir'], None
+        )
         all_worker_cov_files.extend(worker_cov_files)
         total_parallel_time += parallel_time
         total_retry_time += parallel_retry_time
+    
     # 串行测试
     if serial_files:
-        _, serial_time, serial_retry_time = run_with_retries(serial_files, coverage_data_file_serial, test_dir, section_name="串行测试")
+        coverage_data_file_serial = os.path.join(dirs['test_dir'], ".coverage.serial")
+        _, serial_time, serial_retry_time = run_with_retries(
+            serial_files, coverage_data_file_serial, dirs['test_dir'], section_name="串行测试"
+        )
         total_serial_time += serial_time
         total_retry_time += serial_retry_time
+    
+    return {
+        'total_parallel_time': total_parallel_time,
+        'total_serial_time': total_serial_time,
+        'total_retry_time': total_retry_time,
+        'all_worker_cov_files': all_worker_cov_files
+    }
 
-    total_time = total_parallel_time + total_serial_time
+def print_test_statistics(stats):
+    """打印测试时间统计"""
+    total_time = stats['total_parallel_time'] + stats['total_serial_time']
     print("\n================ 测试时间统计 ================")
-    print(f"并行测试耗时: {total_parallel_time:.3f}s")
-    print(f"串行测试耗时: {total_serial_time:.3f}s")
+    print(f"并行测试耗时: {stats['total_parallel_time']:.3f}s")
+    print(f"串行测试耗时: {stats['total_serial_time']:.3f}s")
     print(f"总耗时:       {total_time:.3f}s")
 
+def cleanup_and_generate_reports(stats, dirs):
+    """清理临时文件并生成覆盖率报告"""
     # 合并所有 .coverage* 文件，确保覆盖率完整
+    env = os.environ.copy()
+    env['COVERAGE_FILE'] = dirs['coverage_data_file']
     subprocess.run(["coverage", "combine"], check=True, env=env)
 
     # 合并后统一删除所有 .coverage.worker-* 文件
-    for f in all_worker_cov_files:
+    for f in stats['all_worker_cov_files']:
         try:
             os.remove(f)
         except Exception:
             pass
 
-    # 生成html报告和xml报告，全部放在tests/coverage_result和tests/htmlcov下
+    # 生成html报告和xml报告
     generate_coverage_report(
-        [agents_dir, utils_dir],
-        html_output_dir=htmlcov_dir,
-        xml_output_file=coverage_xml_file,
-        coverage_data_file=coverage_data_file
+        [dirs['agents_dir'], dirs['utils_dir']],
+        html_output_dir=dirs['htmlcov_dir'],
+        xml_output_file=dirs['coverage_xml_file'],
+        coverage_data_file=dirs['coverage_data_file']
     )
+
+def main():
+    # 初始化目录和路径
+    dirs = initialize_directories()
+    
+    # 验证目录是否存在
+    if not validate_directories(dirs):
+        return
+    
+    # 在测试前 import 所有被测模块，确保 coverage 能检测到
+    import_all_modules_from_dir(dirs['agents_dir'], 'test_coverage.agents')
+    import_all_modules_from_dir(dirs['utils_dir'], 'test_coverage.utils')
+    
+    # 设置覆盖率环境
+    setup_coverage_environment(dirs)
+    
+    # 查找测试文件
+    test_files = find_test_files(dirs['test_dir'])
+    if not test_files:
+        print("未找到任何测试文件。", file=sys.stderr)
+        return
+    
+    # 分类测试文件
+    skip_files, serial_files, parallel_files = classify_test_files(test_files, dirs['test_dir'])
+    
+    # 打印跳过的测试
+    print_skipped_tests(skip_files, dirs['test_dir'])
+    
+    # 执行所有测试
+    stats = run_all_tests(parallel_files, serial_files, dirs)
+    
+    # 打印测试统计
+    print_test_statistics(stats)
+    
+    # 清理并生成报告
+    cleanup_and_generate_reports(stats, dirs)
 
 if __name__ == "__main__":
     main()
